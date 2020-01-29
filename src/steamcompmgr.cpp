@@ -2091,6 +2091,13 @@ void check_new_wayland_res( void )
 	wayland_commit_queue.clear();
 }
 
+void fpsSignalHandler( int signum ) {
+	if ( signum == SIGUSR2 )
+	{
+		drawDebugInfo = !drawDebugInfo;
+	}
+}
+
 int
 steamcompmgr_main (int argc, char **argv)
 {
@@ -2238,6 +2245,8 @@ steamcompmgr_main (int argc, char **argv)
 	pOSDBufferA8 = (uint8_t *)calloc( nOSDBufferHeight * nOSDBufferWidth, sizeof( uint8_t ) );
 	pOSDBufferARGB = (uint8_t *)calloc( nOSDBufferHeight * nOSDBufferWidth, sizeof( uint8_t ) * 4 );
 	assert( pOSDBufferA8 != nullptr && pOSDBufferARGB != nullptr );
+
+	signal( SIGUSR2, fpsSignalHandler );
 
 	currentOutputWidth = g_nOutputWidth;
 	currentOutputHeight = g_nOutputHeight;

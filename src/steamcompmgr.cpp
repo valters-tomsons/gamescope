@@ -67,6 +67,11 @@
 #include "steamcompmgr.hpp"
 #include "vblankmanager.hpp"
 
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb_truetype.h"
+
+#include "dejavusans.h"
+
 #define GPUVIS_TRACE_IMPLEMENTATION
 #include "gpuvis_trace_utils.h"
 
@@ -160,8 +165,6 @@ unsigned long	damageSequence = 0;
 
 #define			CURSOR_HIDE_TIME 10000
 
-Bool			gotXError = False;
-
 win				fadeOutWindow;
 Bool			fadeOutWindowGone;
 unsigned int	fadeOutStartTime;
@@ -215,6 +218,16 @@ static Bool		drawDebugInfo = False;
 static Bool		debugEvents = False;
 static Bool		steamMode = False;
 static Bool		alwaysComposite = False;
+
+stbtt_fontinfo fontinfo;
+
+const int nOSDBufferWidth = 50;
+const int nOSDBufferHeight = 25;
+
+uint8_t *pOSDBufferA8;
+uint8_t *pOSDBufferARGB;
+
+VulkanTexture_t debugInfoTex;
 
 std::mutex wayland_commit_lock;
 std::vector<ResListEntry_t> wayland_commit_queue;
@@ -928,57 +941,103 @@ paint_window (Display *dpy, win *w, struct Composite_t *pComposite,
 }
 
 static void
-paint_message (const char *message, int Y, float r, float g, float b)
+paint_message ( const char *message, int &Y )
 {
+	const int nLineHeight = 20;
 
+	float scale = stbtt_ScaleForPixelHeight(&fontinfo, nLineHeight);
+
+	int x = 0;
+
+	int ascent, descent, lineGap;
+	stbtt_GetFontVMetrics(&fontinfo, &ascent, &descent, &lineGap);
+
+	ascent *= scale;
+	descent *= scale;
+
+	for (size_t i = 0; i < strlen( message ); ++i)
+	{
+		/* get bounding box for character (may be offset to account for chars that dip above or below the line */
+		int c_x1, c_y1, c_x2, c_y2;
+		stbtt_GetCodepointBitmapBox(&fontinfo, message[i], scale, scale, &c_x1, &c_y1, &c_x2, &c_y2);
+
+		/* compute y (different characters have different heights */
+		int y = ascent + c_y1 + Y;
+
+		if ( Y + nLineHeight >= nOSDBufferHeight )
+		{
+			return;
+		}
+
+		/* render character (stride and offset is important here) */
+		int byteOffset = x + (y  * nOSDBufferWidth);
+		stbtt_MakeCodepointBitmap(&fontinfo, pOSDBufferA8 + byteOffset, c_x2 - c_x1, c_y2 - c_y1, nOSDBufferWidth, scale, scale, message[i]);
+
+		/* how wide is this character */
+		int ax;
+		stbtt_GetCodepointHMetrics(&fontinfo, message[i], &ax, 0);
+		x += ax * scale;
+
+		/* add kerning */
+		int kern;
+		kern = stbtt_GetCodepointKernAdvance(&fontinfo, message[i], message[i + 1]);
+		x += kern * scale;
+	}
+
+	Y += nLineHeight;
 }
 
-static void
-paint_debug_info (Display *dpy)
-{
-	int Y = 100;
 
-// 	glBindTexture(GL_TEXTURE_2D, 0);
+// static void
+// paint_debug_info (Display *dpy)
+// {
+// 	int Y = 0;
+//
+// 	char messageBuffer[256];
+//
+// 	sprintf( messageBuffer, "Compositing at %.1f FPS", currentFrameRate);
+//
+// 	paint_message( messageBuffer, Y );
+// 	if (find_win(dpy, currentFocusWindow))
+// 	{
+// 		if (gameFocused)
+// 		{
+// 			sprintf( messageBuffer, "Presenting game window 0x%x", (unsigned int)currentFocusWindow);
+// 			paint_message( messageBuffer, Y );
+// 		}
+// 		else
+// 		{
+// 			// must be Steam
+// 			paint_message("Presenting Steam", Y );
+// 		}
+// 	}
+//
+// 	win *overlay = find_win(dpy, currentOverlayWindow);
+// 	win *notification = find_win(dpy, currentNotificationWindow);
+//
+// 	if (overlay && gamesRunningCount && overlay->opacity)
+// 	{
+// 		sprintf(messageBuffer, "Compositing overlay at opacity %f", overlay->opacity / (float)OPAQUE);
+// 		paint_message( messageBuffer, Y );
+// 	}
+//
+// 	if (notification && gamesRunningCount && notification->opacity)
+// 	{
+// 		sprintf(messageBuffer, "Compositing notification at opacity %f", notification->opacity / (float)OPAQUE);
+// 		paint_message( messageBuffer, Y );
+// 	}
+// }
+
+static void
+paint_fps (Display *dpy)
+{
+	int Y = 0;
 
 	char messageBuffer[256];
 
-	sprintf(messageBuffer, "Compositing at %.1f FPS", currentFrameRate);
+	sprintf( messageBuffer, "%.1f", currentFrameRate);
 
-	float textYMax = 0.0f;
-
-	paint_message(messageBuffer, Y, 1.0f, 1.0f, 1.0f); Y += textYMax;
-	if (find_win(dpy, currentFocusWindow))
-	{
-		if (gameFocused)
-		{
-			sprintf(messageBuffer, "Presenting game window %x", (unsigned int)currentFocusWindow);
-			paint_message(messageBuffer, Y, 0.0f, 1.0f, 0.0f); Y += textYMax;
-		}
-		else
-		{
-			// must be Steam
-			paint_message("Presenting Steam", Y, 1.0f, 1.0f, 0.0f); Y += textYMax;
-		}
-	}
-
-	win *overlay = find_win(dpy, currentOverlayWindow);
-	win *notification = find_win(dpy, currentNotificationWindow);
-
-	if (overlay && gamesRunningCount && overlay->opacity)
-	{
-		sprintf(messageBuffer, "Compositing overlay at opacity %f", overlay->opacity / (float)OPAQUE);
-		paint_message(messageBuffer, Y, 1.0f, 0.0f, 1.0f); Y += textYMax;
-	}
-
-	if (notification && gamesRunningCount && notification->opacity)
-	{
-		sprintf(messageBuffer, "Compositing notification at opacity %f", notification->opacity / (float)OPAQUE);
-		paint_message(messageBuffer, Y, 1.0f, 0.0f, 1.0f); Y += textYMax;
-	}
-
-	if (gotXError) {
-		paint_message("Encountered X11 error", Y, 1.0f, 0.0f, 0.0f); Y += textYMax;
-	}
+	paint_message( messageBuffer, Y );
 }
 
 static void
@@ -1006,25 +1065,34 @@ paint_all(Display *dpy, MouseCursor *cursor)
 
 	frameCounter++;
 
-	if (frameCounter == 300)
+	if (frameCounter == 5)
 	{
-		currentFrameRate = 300 * 1000.0f / (currentTime - lastSampledFrameTime);
+		currentFrameRate = 5 * 1000.0f / (currentTime - lastSampledFrameTime);
 		lastSampledFrameTime = currentTime;
 		frameCounter = 0;
 
-		stats_printf( "fps=%f\n", currentFrameRate );
+		static int updateCount = 0;
 
-		if ( w->isSteam )
+		updateCount++;
+
+		if ( updateCount == 20 )
 		{
-			stats_printf( "focus=steam\n" );
-		}
-		else if ( w->isSteamPopup )
-		{
-			stats_printf( "focus=steampopup\n" );
-		}
-		else
-		{
-			stats_printf( "focus=%i\n", w->gameID );
+			stats_printf( "fps=%f\n", currentFrameRate );
+
+			if ( w->isSteam )
+			{
+				stats_printf( "focus=steam\n" );
+			}
+			else if ( w->isSteamPopup )
+			{
+				stats_printf( "focus=steampopup\n" );
+			}
+			else
+			{
+				stats_printf( "focus=%i\n", w->gameID );
+			}
+
+			updateCount = 0;
 		}
 	}
 
@@ -1088,8 +1156,56 @@ paint_all(Display *dpy, MouseCursor *cursor)
 		cursor->paint(w, &composite, &pipeline );
 	}
 
-	if (drawDebugInfo)
-		paint_debug_info(dpy);
+	if ( drawDebugInfo )
+	{
+		if ( frameCounter == 0 )
+		{
+			// Refresh our texture
+			memset( pOSDBufferA8, 0, nOSDBufferHeight * nOSDBufferWidth * sizeof( uint8_t ) );
+
+			paint_fps( dpy );
+
+			for ( int i = 0; i < nOSDBufferHeight * nOSDBufferWidth; i++ )
+			{
+				pOSDBufferARGB[ i * 4 ] = pOSDBufferA8[ i ];
+				pOSDBufferARGB[ i * 4 + 1 ] = pOSDBufferA8[ i ];
+				pOSDBufferARGB[ i * 4 + 2 ] = pOSDBufferA8[ i ];
+				pOSDBufferARGB[ i * 4 + 3 ] = pOSDBufferA8[ i ];
+			}
+
+			if ( debugInfoTex != 0 )
+			{
+				vulkan_free_texture( debugInfoTex );
+				debugInfoTex = 0;
+			}
+
+			debugInfoTex = vulkan_create_texture_from_bits( nOSDBufferWidth, nOSDBufferHeight, VK_FORMAT_A8B8G8R8_UNORM_PACK32, pOSDBufferARGB );
+			assert( debugInfoTex != 0 );
+		}
+
+		int curLayer = composite.nLayerCount;
+
+		composite.layers[ curLayer ].flOpacity = 1.0;
+
+		composite.layers[ curLayer ].flScaleX = 1.0;
+		composite.layers[ curLayer ].flScaleY = 1.0;
+
+		composite.layers[ curLayer ].flOffsetX = -50;
+		composite.layers[ curLayer ].flOffsetY = -50;
+
+		pipeline.layerBindings[ curLayer ].surfaceWidth = nOSDBufferWidth;
+		pipeline.layerBindings[ curLayer ].surfaceHeight = nOSDBufferHeight;
+
+		pipeline.layerBindings[ curLayer ].zpos = 1;
+
+		pipeline.layerBindings[ curLayer ].tex = debugInfoTex;
+		pipeline.layerBindings[ curLayer ].fbid = BIsNested() ? 0 : vulkan_texture_get_fbid( debugInfoTex );
+
+		pipeline.layerBindings[ curLayer ].bFilter = false;
+		pipeline.layerBindings[ curLayer ].bBlackBorder = false;
+
+		composite.nLayerCount += 1;
+	}
 
 	bool bDoComposite = true;
 
@@ -1796,7 +1912,6 @@ error (Display *dpy, XErrorEvent *ev)
 			 ev->error_code, (strlen (name) > 0) ? name : "unknown",
 			 ev->request_code, ev->minor_code, ev->serial);
 
-	gotXError = True;
 	/*    abort ();	    this is just annoying to most people */
 	return 0;
 }
@@ -2114,6 +2229,15 @@ steamcompmgr_main (int argc, char **argv)
 	}
 
 	vblank_init();
+
+	if ( !stbtt_InitFont( &fontinfo, DejaVuSans_ttf, 0 ) )
+	{
+		fprintf (stderr, "font initialization failed!\n");
+	}
+
+	pOSDBufferA8 = (uint8_t *)calloc( nOSDBufferHeight * nOSDBufferWidth, sizeof( uint8_t ) );
+	pOSDBufferARGB = (uint8_t *)calloc( nOSDBufferHeight * nOSDBufferWidth, sizeof( uint8_t ) * 4 );
+	assert( pOSDBufferA8 != nullptr && pOSDBufferARGB != nullptr );
 
 	currentOutputWidth = g_nOutputWidth;
 	currentOutputHeight = g_nOutputHeight;

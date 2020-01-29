@@ -698,8 +698,11 @@ int init_device()
 	
 	VkMemoryRequirements memRequirements;
 	vkGetBufferMemoryRequirements(device, uploadBuffer, &memRequirements);
-	
-	int memTypeIndex =  findMemoryType(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT|VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, memRequirements.memoryTypeBits );
+
+	uint32_t flags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+						VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+
+	int memTypeIndex = findMemoryType( flags , memRequirements.memoryTypeBits );
 	
 	if ( memTypeIndex == -1 )
 	{

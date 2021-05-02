@@ -51,6 +51,7 @@ int BIsNested()
 
 int main(int argc, char **argv)
 {
+	setenv("MANGOHUD", "0", 1);
 	// Grab the starting position of a potential command that follows "--" in argv
 	// Do it before getopt can reorder anything, for use later
 	for ( int i = 0; i < argc; i++ )

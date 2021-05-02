@@ -147,7 +147,7 @@ void inputSDLThreadRun( void )
 				mod = SDL_GetModState();
 				key = SDLScancodeToLinuxKey( event.key.keysym.scancode );
 				
-				if ( event.type == SDL_KEYUP && mod & KMOD_RGUI )
+				if ( event.type == SDL_KEYUP && mod & KMOD_RSHIFT )
 				{
 					switch ( key )
 					{
